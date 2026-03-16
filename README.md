@@ -1,5 +1,12 @@
 # ⚡ Grid Inertia PINN
 
+![PyTorch](https://img.shields.io/badge/PyTorch-deep_learning-orange?logo=pytorch)
+![Physics Informed ML](https://img.shields.io/badge/Physics--Informed-ML-blue)
+![Stochastic Modeling](https://img.shields.io/badge/Stochastic-Process%20Modeling-green)
+![Signal Processing](https://img.shields.io/badge/Signal%20Processing-Savitzky--Golay-purple)
+![Time Series](https://img.shields.io/badge/Time%20Series-Analysis-teal)
+![Scientific Python](https://img.shields.io/badge/Scientific-Python-yellow?logo=python)
+
 An experimental **Physics-Informed Neural Network (PINN)** for estimating effective grid inertia from publicly available frequency and generation data — without proprietary generator dispatch information.
 
 > ⚠️ **This is exploratory research.** Results are preliminary and should be interpreted with appropriate scepticism. The methodology is novel and not yet validated against ground-truth inertia measurements.
@@ -36,7 +43,9 @@ Trained once on a full year of data. Performs inference on any new frequency win
 
 ## 📊 Preliminary Findings
 
-These are observations from running the model on 2018–2019 German grid data. They are interesting but **not conclusive without further validation**.
+These are observations from running the model on 2018–2019 German grid data. They are interesting but **not conclusive without further validation**.  
+
+![InertiaNet inference results](images/04_inference.png)
 
 | Metric | Value |
 |--------|-------|
@@ -159,6 +168,7 @@ jupyter notebook notebooks/04_inference.ipynb
 
 ## 🔮 Potential Extensions
 
+- Training hyperparameter tuning for better modelling of f(t) and white noise, current frequency response is somewhat overfit, and residuals have slight bias 
 - Validate against ENTSO-E frequency event database (known ΔP + observed RoCoF)
 - Extend training to 2015–2020 to capture the full renewable transition
 - Compare CE grid results against Nordic/GB grids where inertia variation is larger
