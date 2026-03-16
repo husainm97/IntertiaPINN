@@ -1,174 +1,181 @@
-# Grid Inertia PINN
+# ⚡ Grid Inertia PINN
 
-A **Physics-Informed Neural Network (PINN)** for estimating the effective rotational inertia of the German power grid from publicly available OPSD generation and demand data.
+An experimental **Physics-Informed Neural Network (PINN)** for estimating effective grid inertia from publicly available frequency and generation data — without proprietary generator dispatch information.
 
----
-
-## Scientific Motivation
-
-Grid inertia determines how resistant power system frequency is to disturbances. As renewable penetration increases, synchronous generators are progressively displaced by inverter-based resources — reducing inertia and increasing frequency volatility.
-
-Traditional inertia estimation relies on controlled disturbance experiments, detailed generator dispatch data, or proprietary system operator models. These approaches are typically non-public and static.
-
-This project introduces a PINN-based inference method that combines frequency dynamics equations, demand and generation data, and machine learning to estimate **real-time inertia and system stability metrics** from open data alone.
+> ⚠️ **This is exploratory research.** Results are preliminary and should be interpreted with appropriate scepticism. The methodology is novel and not yet validated against ground-truth inertia measurements.
 
 ---
 
-## Novel Contributions
+## 🔬 What This Is
 
-1. Latent inertia inference without proprietary generator dispatch data
-2. Physics-informed learning of frequency dynamics via the swing equation
-3. Uncertainty-aware stability metric (Jitter Index)
-4. Demand shock vulnerability analysis via Monte Carlo simulation
-5. Fully open and reproducible framework for grid inertia estimation
+As renewable penetration increases across European grids, synchronous generators are progressively displaced by inverter-based resources. This reduces rotational inertia and increases sensitivity to frequency disturbances — a growing concern for grid operators.
 
----
+Standard inertia estimation typically requires controlled disturbance experiments or proprietary system operator models. This project explores whether inertia can be estimated from open data alone, using physics-informed machine learning.
 
-## Core Physics
-
-Grid frequency dynamics follow the **swing equation**:
+The approach is based on the **stochastic swing equation**:
 
 ```
-M(t) · df/dt = P_mech(t) − P_elec(t) − D(t) · (f − f₀)
+M · df/dt + D · (f − f₀) = ξ(t)
 ```
 
-where `M(t)` is the time-varying system inertia constant, `D(t)` is the damping coefficient, and `f₀ = 50 Hz`.
+where `ξ(t)` is an unobserved stochastic power imbalance process. Rather than requiring `ξ(t)` directly, the model identifies `M` and `D` as the parameter pair for which the residual `R = M·df/dt + D·(f−f₀)` exhibits the statistical properties of white noise — i.e. zero autocorrelation at all lags.
 
-The system inertia is estimated as a generation-weighted average:
+---
 
+## 💡 What the Model Does
+
+Two complementary approaches are implemented:
+
+### 🔍 `InertiaPINN` — per-window analysis (notebook 03)
+Trains a small network on a single frequency window to find the `(M, D)` pair that whitens the residual for that window. Slow (requires training per estimate) but useful for detailed analysis of specific time periods.
+
+### 🚀 `InertiaNet` — generalisable real-time estimator (notebook 04)
+Trained once on a full year of data. Performs inference on any new frequency window in a single forward pass — sub-millisecond per estimate. This is the intended production-style model.
+
+---
+
+## 📊 Preliminary Findings
+
+These are observations from running the model on 2018–2019 German grid data. They are interesting but **not conclusive without further validation**.
+
+| Metric | Value |
+|--------|-------|
+| M_PINN (2019 mean) | 6.23 ± 0.62 MWs/MVA |
+| M_table (generation side only) | 3.31 MWs/MVA |
+| Apparent load-side contribution | ~2.9 MWs/MVA |
+| D (damping) | 0.44 ± 1.09 MW/Hz |
+| Inference time | <1ms per window |
+
+**Observations worth noting:**
+- 🌙 Inferred M is consistently higher overnight than during peak afternoon hours (Δ ≈ 0.3 MWs/MVA in 2019) — consistent with industrial rotating loads contributing more inertia at night
+- 📈 M_PINN is always greater than M_table — the excess (~2.9 MWs/MVA) may represent load-side inertia that the generation table cannot capture
+- 📉 A weak negative correlation between M_PINN and renewable fraction is observed — physically expected, though not strongly pronounced in a single year of CE grid data
+- 🔄 D has high variance across windows — harder to identify than M under normal grid conditions
+
+These patterns are **physically plausible** but the model has not been validated against independent inertia measurements, so caution is warranted.
+
+---
+
+## ⚙️ Core Physics
+
+**Why not just use the table method?**
+
+The generation-weighted H_sys formula:
 ```
 H_sys(t) = Σ [ H_i · P_i(t) ] / P_total(t)
 ```
 
-Inverter-based resources (solar PV, offshore wind) contribute zero synchronous inertia.
+...only counts synchronous generators. It assigns zero to wind, solar, and all load-side rotating machinery. The PINN attempts to recover the full effective inertia from frequency dynamics, without needing generation data at all.
+
+**Why is df/dt hard?**
+
+Finite differences on 1-second PMU data amplify noise by ~50x. The model smooths the frequency trajectory using a Savitzky-Golay filter before computing df/dt — giving a clean derivative without a per-window learned smoother.
 
 ---
 
-## Grid Vulnerability Metric
-
-The **Jitter Index** quantifies instantaneous vulnerability to disturbances:
+## 🏗️ Architecture
 
 ```
-J(t) = Var(df/dt) / M(t)
+raw f(t) — 3600s window
+    ↓  Savitzky-Golay smooth → df/dt  (~54x noise reduction)
+    ↓  StandardScaler normalise
+    ↓  1D-CNN feature extraction
+    ↓  MLP
+    ↓
+  M (MWs/MVA)    D (MW/Hz)
 ```
 
-Higher values indicate reduced stability margins. Monte Carlo demand shocks are used to simulate frequency response under perturbation.
+**Training signal:** whiteness of `R = M·df/dt + D·(f−f₀)` across a batch of windows. No labels. No ΔP. Frequency data only.
 
 ---
 
-## Model Architecture
-
-**Inputs:**
-- Demand (actual + forecast)
-- Solar, wind onshore, wind offshore generation
-- Dispatchable generation (thermal + hydro residual)
-- Net power imbalance proxy
-- Time features (hour, month, day-of-week)
-
-**Outputs:**
-- Estimated inertia `M(t)` / `H_sys(t)`
-- Damping coefficient `D(t)`
-- RoCoF proxy `df/dt`
-
-**Loss function:**
-```
-L = L_data + λ_phys · L_swing + λ_reg · L_uncertainty
-```
-
-| Term | Description |
-|---|---|
-| `L_data` | MSE between predicted and proxy-estimated `H_sys` |
-| `L_swing` | Swing equation residual (physics constraint) |
-| `L_uncertainty` | Smoothness regularisation on inertia estimates |
-
----
-
-## Data Sources
-
-**Primary:** [Open Power System Data (OPSD)](https://open-power-system-data.org/) — 15-min resolution, 2015–2020.
-
-| Column | Description |
-|---|---|
-| `DE_load_actual_entsoe_transparency` | German demand (MW) |
-| `DE_solar_generation_actual` | Solar PV generation |
-| `DE_wind_onshore_generation_actual` | Onshore wind |
-| `DE_wind_offshore_generation_actual` | Offshore wind |
-| `DE_solar_capacity` | Installed solar capacity |
-| `DE_wind_capacity` | Installed wind capacity |
-
-**Optional:** ENTSO-E frequency measurement data (enables direct RoCoF supervision).
-
----
-
-## Project Structure
+## 📁 Project Structure
 
 ```
 grid-inertia-pinn/
 ├── data/
+│   ├── raw/
+│   │   └── de_frequency_1s_{year}.csv     ← 1-second TransnetBW frequency
 │   └── processed/
 │       ├── de_load_15min.csv
 │       ├── de_solar_15min.csv
 │       ├── de_wind_15min.csv
-│       └── de_inertia_15min.csv          ← H_sys proxy + risk indicators
+│       └── de_inertia_15min.csv
+│
+├── models/
+│   ├── pinn.py                            ← InertiaPINN + InertiaNet
+│   └── losses.py                          ← PINNLoss + InertiaNetLoss
 │
 ├── notebooks/
-│   ├── 01_eda.ipynb                      ← load / solar / wind exploration
-│   ├── 02_inertia_proxy.ipynb            ← build H_sys from generation mix  ✅
-│   ├── 03_pinn_training.ipynb            ← model definition + training loop
-│   └── 04_insights.ipynb                 ← RoCoF, Jitter Index, risk windows
+│   ├── 03_pinn_training.ipynb             ← per-window PINN analysis
+│   └── 04_inference.ipynb                 ← generalisable real-time model
 │
-├── src/
-│   ├── inertia.py                        ← H_sys & Jitter Index computation
-│   ├── losses.py                         ← swing equation + data + uncertainty loss
-│   │
-│   ├── models/
-│   │   └── pinn.py                       ← PyTorch PINN (MLP + physics head)
-│   │
-│   └── training/
-│       ├── train.py                      ← training loop
-│       └── config.py                     ← hyperparameters & λ weights
+├── data/
+│   ├── build_data.py                      ← builds processed CSVs from OPSD
+│   └── fetch_frequency_1s.py              ← downloads TransnetBW frequency data
 │
-├── configs/
-│   └── experiment_v1.yaml                ← reproducible experiment config
-│
-├── reports/
-│   └── figures/                          ← generated plots
-│
-└── README.md
+└── checkpoints/
+    ├── pinn/                              ← InertiaPINN ensemble weights
+    └── inertianet/                        ← InertiaNet trained weights
 ```
 
 ---
 
-## Setup
+## 🚀 Setup
 
 ```bash
-pip install torch pandas numpy matplotlib seaborn scikit-learn pyyaml
+pip install torch pandas numpy matplotlib seaborn scikit-learn scipy
 ```
 
 ---
 
-## Usage
+## 📋 Usage
 
-Run notebooks in order:
+```bash
+# 1. Download 1-second frequency data
+python data/fetch_frequency_1s.py --years 2018 2019
 
-```
-01_eda  →  02_inertia_proxy  →  03_pinn_training  →  04_insights
+# 2. Build processed CSVs from OPSD
+python data/build_data.py
+
+# 3. Per-window analysis (slow, detailed)
+jupyter notebook notebooks/03_pinn_training.ipynb
+
+# 4. Train generalisable model + inference (fast)
+jupyter notebook notebooks/04_inference.ipynb
 ```
 
 ---
 
-## Expected Outputs
+## 🔭 Limitations and Open Questions
 
-- `H_sys(t)` — estimated inertia time series
-- `J(t)` — grid vulnerability (Jitter) index
-- Shock-response simulations under Monte Carlo demand perturbations
-- Research-grade figures and whitepaper
+- **No ground truth validation** — M_PINN has not been compared against event-based inertia estimates from actual frequency disturbances
+- **D is poorly constrained** — damping is harder to identify than inertia from ambient frequency data under normal grid conditions
+- **Single synchronous area** — the CE grid is large and well-coupled; results may differ for smaller, weaker systems (GB, Nordic) where inertia variation is more pronounced
+- **Stationarity assumption** — the stochastic swing equation assumes slowly-varying M and D within each window; this may not hold during rapid renewable ramps
+- **Single year of training** — the model was trained on 2018 data only; multi-year training may improve stability of estimates
 
 ---
 
-## Future Extensions
+## 🔮 Potential Extensions
 
-- Incorporate battery storage and inverter synthetic inertia
-- Extend to EU-wide grid (ENTSO-E interconnections)
-- Real-time inertia forecasting pipeline
-- Integration with live ENTSO-E Transparency Platform API
+- Validate against ENTSO-E frequency event database (known ΔP + observed RoCoF)
+- Extend training to 2015–2020 to capture the full renewable transition
+- Compare CE grid results against Nordic/GB grids where inertia variation is larger
+- Incorporate battery storage synthetic inertia signals
+- Build a live inference pipeline against the ENTSO-E Transparency Platform API
+
+---
+
+## 📚 Data Sources
+
+| Source | Description | Resolution |
+|--------|-------------|------------|
+| [OPSD Time Series](https://data.open-power-system-data.org/time_series/) | Load, wind, solar generation | 15-min |
+| [TransnetBW / OSF](https://osf.io/) | German grid frequency | 1-second |
+
+---
+
+## 📄 License
+
+MIT — experimental research code, use at your own risk.
