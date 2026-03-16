@@ -96,3 +96,7 @@ conventional = data["conventional_power_plants"]
 print(ts)
 print(renewable)
 print(conventional)
+
+de_cols = [c for c in ts.columns if c.startswith("DE")]
+for c in de_cols:
+    print(c)
