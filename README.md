@@ -35,7 +35,7 @@ The key insight: if $\xi(t)$ is physically reasonable — uncorrelated in time, 
 
 $$R(t) = M \frac{df}{dt} + D(f - f_0)$$
 
-has zero autocorrelation at all lags. The model identifies $M$ and $D$ by finding the pair that whitens $R$.
+has zero autocorrelation at all lags. The model identifies $M$ and $D$ by finding the pair that whitens $R$. By 'whitening' the residual, the expected outcome is that all time-dependent physical dynamics (inertia and damping) have been fully captured by the model, leaving behind only the unpredictable, non-autocorrelated noise of the underlying power demand.
 
 **Important caveat:** this identification is theoretically sound but numerically weak on CE grid data. The gradient signal driving $M$ and $D$ toward the correct values is small because $df/dt$ on the stable CE grid is O(1e-3) Hz/s. The model finds physically plausible values but convergence is not guaranteed to a unique solution. See Limitations.
 
